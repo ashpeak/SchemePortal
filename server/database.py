@@ -4,67 +4,75 @@ from pymongo import MongoClient
 
 class MySchemeDB:
     def __init__(self, uri="mongodb+srv://vikash:yvikash880@cluster0.d2gtk4z.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0", 
-                 db_name="myscheme", collection_name="schemes"):
+                 db_name="myscheme", 
+                 schemes_collection="schemes", 
+                 facets_collection="facets"):
         self.client = MongoClient(uri)
         self.db = self.client[db_name]
-        self.collection = self.db[collection_name]
+        self.schemes = self.db[schemes_collection]
+        self.facets = self.db[facets_collection]
         logging.info("🔌 Connected to MongoDB.")
 
-    def insert_items(self, items):
-        if not items:
-            logging.warning("⚠️ No items to insert.")
-            return
-        try:
-            self.collection.insert_many(items, ordered=False)
-            logging.info(f"✅ Inserted {len(items)} items into the database.")
-        except Exception as e:
-            logging.error(f"❌ Error inserting items: {e}")
+    def insert_many_documents(self, collection, documents, key_field=None):
+        inserted = 0
+        updated = 0
+        skipped = 0
 
-    def delete_all_items(self):
-        result = self.collection.delete_many({})
-        logging.info(f"🗑️ Deleted {result.deleted_count} items from the database.")
+        for index, doc in enumerate(documents):
+            try:
+                key_value = self._extract_key(doc, key_field)
+                if key_field and not key_value:
+                    logging.warning(f"⚠️ Document at index {index} missing key '{key_field}'. Skipping.")
+                    skipped += 1
+                    continue
+
+                filter_query = {f"{key_field}": key_value} if key_field else doc
+                result = collection.update_one(filter_query, {"$set": doc}, upsert=True)
+
+                if result.upserted_id:
+                    inserted += 1
+                elif result.modified_count:
+                    updated += 1
+                else:
+                    skipped += 1
+
+            except Exception as e:
+                skipped += 1
+                logging.error(f"❌ Skipped document at index {index} due to error: {e}")
+                logging.debug(f"📄 Skipped document content: {json.dumps(doc, indent=2)}")
+
+        return inserted, updated, skipped
+
+
+    def _extract_key(self, doc, key_field):
+        keys = key_field.split(".")
+        for key in keys:
+            if isinstance(doc, dict):
+                doc = doc.get(key)
+            else:
+                return None
+        return doc
 
     def upload_json(self, json_path):
-        """
-        Upload data from a JSON file and upsert it into the database.
-        """
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            items = data.get("hits", {}).get("items", [])
-            total = len(items)
-            if not items:
-                logging.warning("⚠️ No items found in the JSON file.")
-                return
+            # 1. Upload schemes
+            scheme_items = data.get("hits", {}).get("items", [])
+            logging.info(f"📂 Found {len(scheme_items)} schemes to upload.")
+            schemes_inserted, schemes_updated, schemes_skipped = self.insert_many_documents(
+                self.schemes, scheme_items, key_field="fields.slug"
+            )
+            logging.info(f"📊 Schemes → Inserted: {schemes_inserted}, Updated: {schemes_updated}, Skipped: {schemes_skipped}")
 
-            logging.info(f"📂 Loaded {total} items from {json_path}")
-
-            inserted = 0
-            updated = 0
-
-            for index, item in enumerate(items):
-                slug = item.get("fields", {}).get("slug")
-                if not slug:
-                    logging.warning(f"⚠️ Item at index {index} missing 'slug'. Skipping.")
-                    continue
-
-                result = self.collection.update_one(
-                    {"fields.slug": slug},
-                    {"$set": item},
-                    upsert=True
-                )
-
-                if result.upserted_id:
-                    inserted += 1
-                    logging.info(f"🆕 Inserted new item for slug: {slug}")
-                elif result.modified_count:
-                    updated += 1
-                    logging.info(f"🔄 Updated existing item for slug: {slug}")
-                else:
-                    logging.info(f"➖ No changes made for slug: {slug}")
-
-            logging.info(f"\n📊 Upsert Summary → Inserted: {inserted}, Updated: {updated}, Skipped: {total - inserted - updated}")
+            # 2. Upload facets
+            facet_items = data.get("facets", [])
+            logging.info(f"📂 Found {len(facet_items)} facets to upload.")
+            facets_inserted, facets_updated, facets_skipped = self.insert_many_documents(
+                self.facets, facet_items, key_field="identifier"
+            )
+            logging.info(f"📊 Facets → Inserted: {facets_inserted}, Updated: {facets_updated}, Skipped: {facets_skipped}")
 
         except Exception as e:
             logging.error(f"❌ Error uploading JSON: {e}", exc_info=True)

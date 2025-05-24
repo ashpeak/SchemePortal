@@ -1,133 +1,99 @@
-from fastapi import FastAPI, Query, HTTPException
-from typing import List, Optional
+# main.py
+from fastapi import FastAPI, HTTPException, Query
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
-from motor.motor_asyncio import AsyncIOMotorClient
-from bson.regex import Regex
+
+from db import MongoDBClient  # ← import from db.py
+
+# ----------------------------- Pydantic Models -----------------------------
+
+class AgeRange(BaseModel):
+    gte: Optional[int] = None
+    lte: Optional[int] = None
+
+class AgeGroup(BaseModel):
+    pwd: Optional[AgeRange] = None
+    ews: Optional[AgeRange] = None
+    sc: Optional[AgeRange] = None
+    general: Optional[AgeRange] = None
+    obc: Optional[AgeRange] = None
+    st: Optional[AgeRange] = None
+    female: Optional[AgeRange] = None
+    widowed: Optional[AgeRange] = None
+    male: Optional[AgeRange] = None
+    widow: Optional[AgeRange] = None
+    pvtg: Optional[AgeRange] = None
+    transgender: Optional[AgeRange] = None
+    person_with_disability: Optional[AgeRange] = None
+    particularly_vulnerable_tribal_groups_pvtg: Optional[AgeRange] = None
+
+class SchemeFields(BaseModel):
+    beneficiaryState: Optional[List[str]] = None
+    schemeShortTitle: Optional[str] = None
+    level: Optional[str] = None
+    nodalMinistryName: Optional[str] = None
+    schemeCategory: Optional[List[str]] = None
+    schemeName: str
+    schemeCloseDate: Optional[str] = None
+    slug: str
+    briefDescription: Optional[str] = None
+    age: Optional[AgeGroup] = None
+    tags: Optional[List[str]] = None
+
+class Scheme(BaseModel):
+    id: Optional[str] = None
+    fields: SchemeFields
+    highlight: Optional[Dict] = {}
+    schemeData: Optional[Any] = None
+    _id: Optional[str] = None
+
+# ----------------------------- FastAPI App -----------------------------
 
 app = FastAPI(title="MyScheme API")
 
-# Async MongoDB client
-client = AsyncIOMotorClient("mongodb+srv://vikash:yvikash880@cluster0.d2gtk4z.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-db = client.myscheme
-collection = db.schemes
+mongo_client = MongoDBClient(
+    uri="mongodb+srv://vikash:yvikash880@cluster0.d2gtk4z.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+)
 
-class AgeRange(BaseModel):
-    gte: Optional[int]
-    lte: Optional[int]
+@app.get("/", tags=["General"])
+async def home():
+    return {"message": "Server is running"}
 
-class AgeGroup(BaseModel):
-    pwd: Optional[AgeRange]
-    ews: Optional[AgeRange]
-    sc: Optional[AgeRange]
-    general: Optional[AgeRange]
-    obc: Optional[AgeRange]
-    st: Optional[AgeRange]
-    female: Optional[AgeRange]
-    widowed: Optional[AgeRange]
-    male: Optional[AgeRange]
-    widow: Optional[AgeRange]
-    pvtg: Optional[AgeRange]
-    transgender: Optional[AgeRange]
-    person_with_disability: Optional[AgeRange]
-    particularly_vulnerable_tribal_groups_pvtg: Optional[AgeRange]
-
-class SchemeFields(BaseModel):
-    beneficiaryState: Optional[List[str]]
-    schemeShortTitle: Optional[str]
-    level: Optional[str]
-    nodalMinistryName: Optional[str]
-    schemeCategory: Optional[List[str]]
-    schemeName: str
-    schemeCloseDate: Optional[str]
-    slug: str
-    briefDescription: Optional[str]
-    age: Optional[dict]
-    tags: Optional[List[str]]
-
-class Scheme(BaseModel):
-    id: str
-    fields: SchemeFields
-    highlight: Optional[dict] = {}
-
-@app.get("/schemes", response_model=List[Scheme])
-async def get_schemes(skip: int = 0, limit: int = 20):
-    """
-    Get all schemes with pagination
-    """
-    cursor = collection.find().skip(skip).limit(limit)
-    schemes = []
-    async for doc in cursor:
-        schemes.append(doc)
-    return schemes
-
-@app.get("/schemes/{slug}", response_model=Scheme)
-async def get_scheme_by_slug(slug: str):
-    """
-    Get scheme by slug
-    """
-    scheme = await collection.find_one({"fields.slug": slug})
-    if not scheme:
-        raise HTTPException(status_code=404, detail="Scheme not found")
-    return scheme
-
-@app.get("/schemes/search", response_model=List[Scheme])
-async def search_schemes(q: str = Query(..., min_length=2), skip: int = 0, limit: int = 20):
-    """
-    Search schemes by schemeName or briefDescription (case-insensitive)
-    """
-    regex = Regex(f".*{q}.*", "i")
-    query = {
-        "$or": [
-            {"fields.schemeName": regex},
-            {"fields.briefDescription": regex}
-        ]
-    }
-    cursor = collection.find(query).skip(skip).limit(limit)
-    results = []
-    async for doc in cursor:
-        results.append(doc)
-    return results
-
-@app.get("/schemes/ministry/{ministry_name}", response_model=List[Scheme])
-async def get_schemes_by_ministry(ministry_name: str, skip: int = 0, limit: int = 20):
-    """
-    Filter schemes by nodalMinistryName (case-insensitive exact match)
-    """
-    query = {"fields.nodalMinistryName": {"$regex": f"^{ministry_name}$", "$options": "i"}}
-    cursor = collection.find(query).skip(skip).limit(limit)
-    results = []
-    async for doc in cursor:
-        results.append(doc)
-    return results
-
-@app.get("/schemes/category/{category}", response_model=List[Scheme])
-async def get_schemes_by_category(category: str, skip: int = 0, limit: int = 20):
-    """
-    Filter schemes by schemeCategory (category contained in array)
-    """
-    query = {"fields.schemeCategory": {"$in": [category]}}
-    cursor = collection.find(query).skip(skip).limit(limit)
-    results = []
-    async for doc in cursor:
-        results.append(doc)
-    return results
-
-@app.get("/schemes/tag/{tag}", response_model=List[Scheme])
-async def get_schemes_by_tag(tag: str, skip: int = 0, limit: int = 20):
-    """
-    Filter schemes by tags (tags contained in array)
-    """
-    query = {"fields.tags": {"$in": [tag]}}
-    cursor = collection.find(query).skip(skip).limit(limit)
-    results = []
-    async for doc in cursor:
-        results.append(doc)
-    return results
-
-@app.get("/facets")
+@app.get("/facets", tags=["Facets"])
 async def get_facets():
-    # Assuming only one root document containing the facets array
-    doc = collection.find_one({}, {"_id": 0, "facets": 1})
-    if not doc or "facets" not in doc:
-        raise HTTPException(status_code=404, detail="Facets not found")
-    return doc["facets"]
+    return await mongo_client.get_facets()
+
+@app.get("/schemes", response_model=List[Scheme], tags=["Schemes"])
+async def get_schemes(skip: int = 0, limit: int = 20):
+    return await mongo_client.fetch_schemes({}, skip, limit)
+
+@app.get("/schemes/{slug}", response_model=Scheme, tags=["Schemes"])
+async def get_scheme(slug: str):
+    return await mongo_client.fetch_scheme_by_slug(slug)
+
+@app.get("/schemes/ministry/{ministry_name}", response_model=List[Scheme], tags=["Schemes by ministries"])
+async def get_schemes_by_ministry(ministry_name: str, skip: int = 0, limit: int = 20):
+    return await mongo_client.get_schemes_by_field("fields.nodalMinistryName", ministry_name, skip, limit)
+
+@app.get("/schemes/category/{category}", response_model=List[Scheme], tags=["Schemes categories"])
+async def get_schemes_by_category(category: str, skip: int = 0, limit: int = 20):
+    return await mongo_client.get_schemes_by_field("fields.schemeCategory", category, skip, limit)
+
+@app.get("/schemes/tag/{tag}", response_model=List[Scheme], tags=["Search all Schemes"])
+async def get_schemes_by_tag(tag: str, skip: int = 0, limit: int = 20):
+    return await mongo_client.get_schemes_by_field("fields.tags", tag, skip, limit)
+
+@app.get("/search/schemes", response_model=List[Scheme], tags=["Schemes"])
+async def search_schemes_v2(
+    keyword: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),  # placeholder
+    sort: Optional[str] = Query(None),  # placeholder
+    lang: Optional[str] = Query(None),  # placeholder
+    from_: int = Query(0, alias="from"),
+    size: int = Query(10)
+):
+    if keyword:
+        return await mongo_client.search_schemes(keyword, skip=from_, limit=size)
+
+    projection = {"schemeData": 0}
+    return await mongo_client.fetch_schemes({}, skip=from_, limit=size, projection=projection)
